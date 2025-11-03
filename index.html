@@ -47,301 +47,319 @@
   <script src="https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js"></script>
 
   <script>
-    // Append ?v=-1 to the URL to cache-bust smug browsers that ignore your Cache-Control headers.
-    let wasm_linux_version = parseInt(
-      new URLSearchParams(document.location.search).get("v") || 1
-    );
-    wasm_linux_version =
-      wasm_linux_version < 0 ? +new Date() : wasm_linux_version;
-    document.write(
-      "<l" +
-        'ink rel="stylesheet" href="bright.css?v=' +
-        wasm_linux_version +
-        '">'
-    );
-    document.write(
-      "<l" +
-        'ink rel="stylesheet" href="xterm.css?v=' +
-        wasm_linux_version +
-        '">'
-    );
-    document.write(
-      "<scr" + 'ipt src="linux.js?v=' + wasm_linux_version + '"></scr' + "ipt>"
-    );
-    document.write(
-      "<scr" + 'ipt src="xterm.js?v=' + wasm_linux_version + '"></scr' + "ipt>"
-    );
+        // Append ?v=-1 to the URL to cache-bust smug browsers that ignore your Cache-Control headers.
+        let wasm_linux_version = parseInt(
+          new URLSearchParams(document.location.search).get("v") || 1
+        );
+        wasm_linux_version =
+          wasm_linux_version < 0 ? +new Date() : wasm_linux_version;
+        document.write(
+          "<l" +
+            'ink rel="stylesheet" href="bright.css?v=' +
+            wasm_linux_version +
+            '">'
+        );
+        document.write(
+          "<l" +
+            'ink rel="stylesheet" href="xterm.css?v=' +
+            wasm_linux_version +
+            '">'
+        );
+        document.write(
+          "<scr" + 'ipt src="linux.js?v=' + wasm_linux_version + '"></scr' + "ipt>"
+        );
+        document.write(
+          "<scr" + 'ipt src="xterm.js?v=' + wasm_linux_version + '"></scr' + "ipt>"
+        );
 
-    document.addEventListener(
-      "DOMContentLoaded",
-      async () => {
-        const term = new Terminal({
-          theme: { background: "#000000", foreground: "#FFFFFF" },
-          fontSize: 14,
-          fontFamily: "Courier New, monospace",
-          cursorBlink: true,
-        });
-        term.open(document.getElementById("terminal"));
+        document.addEventListener(
+          "DOMContentLoaded",
+          async () => {
+          async () => {
+            const term = new Terminal({
+              theme: { background: "#000000", foreground: "#00FF00" },
+              fontSize: 16,
+              fontFamily: "Courier New, monospace",
+              cursorBlink: true,
+            });
+            term.open(document.getElementById("terminal"));
 
-        const log = (text) =>
-          term.write(("\x1B[2m" + text + "\x1B[0m\n").replaceAll("\n", "\r\n"));
-        const console_write = (data) => term.write(data); // Pre-decoded UTF-8 data.
+            // Calculate terminal dimensions to fill the screen
+            const resizeTerminal = () => {
+              const terminalElement = document.getElementById('terminal');
+              const width = terminalElement.clientWidth;
+              const height = terminalElement.clientHeight;
 
-        // Global Python state
-        let pyodide = null;
-        let pythonReady = false;
-        let pythonLoading = false;
-        let pythonMode = false;
-        let pythonBuffer = "";
+              // Calculate cols and rows based on font size
+              const cols = Math.floor(width / 9.6); // Approximate char width for 16px font
+              const rows = Math.floor(height / 19); // Approximate line height for 16px font
 
-        // Initialize Pyodide in the background (non-blocking)
-        async function initPython() {
-          if (pythonLoading || pythonReady) {
-            return; // Already loading or loaded
-          }
+              term.resize(cols, rows);
+            };
 
-          pythonLoading = true;
-          try {
-            log("Loading Python environment (this may take 10-30 seconds)...");
-            log("You can continue using Linux commands while Python loads.");
+            // Initial resize after terminal is ready
+            setTimeout(resizeTerminal, 100);
 
-            // Add a timeout to prevent infinite hanging
-            const loadWithTimeout = Promise.race([
-              loadPyodide({
-                indexURL: "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/",
-              }),
-              new Promise((_, reject) =>
-                setTimeout(
-                  () => reject(new Error("Pyodide loading timeout (60s)")),
-                  60000
-                )
-              ),
-            ]);
+            // Resize when window size changes
+            window.addEventListener('resize', resizeTerminal);        const log = (text) =>
+              term.write(("\x1B[2m" + text + "\x1B[0m\n").replaceAll("\n", "\r\n"));
+            const console_write = (data) => term.write(data); // Pre-decoded UTF-8 data.
 
-            pyodide = await loadWithTimeout;
+            // Global Python state
+            let pyodide = null;
+            let pythonReady = false;
+            let pythonLoading = false;
+            let pythonMode = false;
+            let pythonBuffer = "";
 
-            // Redirect Python stdout to terminal
-            await pyodide.runPythonAsync(`
-import sys
-from io import StringIO
-sys.stdout = StringIO()
-sys.stderr = StringIO()
-            `);
-
-            pythonReady = true;
-            pythonLoading = false;
-            log("✓ Python 3.11 ready! Type 'python' or 'python3' to start.");
-            log("  Type 'exit()' to return to Linux shell.");
-          } catch (error) {
-            pythonLoading = false;
-            log("✗ Python initialization failed: " + error.message);
-            log(
-              "  Tip: Try reloading the page or check your internet connection."
-            );
-            console.error("Python init error:", error);
-          }
-        }
-
-        // Execute Python code
-        async function executePython(code) {
-          if (!pythonReady) {
-            if (pythonLoading) {
-              return "Python is still loading, please wait...\r\n";
-            }
-            return "Python is not available. Try reloading the page.\r\n";
-          }
-
-          try {
-            // Clear previous output
-            await pyodide.runPythonAsync(`
-sys.stdout = StringIO()
-sys.stderr = StringIO()
-            `);
-
-            // Run the code (use async version for better performance)
-            let result = await pyodide.runPythonAsync(code);
-
-            // Get stdout and stderr
-            let stdout = await pyodide.runPythonAsync("sys.stdout.getvalue()");
-            let stderr = await pyodide.runPythonAsync("sys.stderr.getvalue()");
-
-            let output = "";
-            if (stdout) output += stdout;
-            if (stderr) output += stderr;
-
-            // If there's a return value and no stdout, show it (like Python REPL)
-            if (result !== undefined && result !== null && !stdout && !stderr) {
-              output += String(result);
-            }
-
-            return output ? output + "\r\n" : "";
-          } catch (error) {
-            // Format Python errors nicely
-            const errorMsg = error.message || String(error);
-            return "Python Error: " + errorMsg + "\r\n";
-          }
-        }
-
-        // This is needed for SharedArrayBuffer on modern browsers.
-        if (!window.crossOriginIsolated) {
-          log(
-            "Error: Server did not set correct cross-origin-isolated headers."
-          );
-          console_write(
-            "\r\n\r\n\r\n  IF YOU SEE THIS ERROR RELOADING THE PAGE MAY HELP.\r\n\r\n\r\n"
-          );
-          // Keep going though, it might work in some environments...
-        }
-
-        // Start loading Python in parallel with Linux boot (non-blocking)
-        // Use setTimeout to ensure it doesn't block the main thread
-        setTimeout(() => {
-          initPython().catch((err) => {
-            console.error("Failed to initialize Python:", err);
-          });
-        }, 2000); // Wait 2 seconds after Linux starts booting
-
-        try {
-          const worker_url = "linux-worker.js?v=" + wasm_linux_version;
-
-          const vmlinux = await WebAssembly.compileStreaming(
-            fetch("vmlinux.wasm?v=" + wasm_linux_version)
-          );
-
-          // Boot on 3 CPUs, we will bring up more later on as needed.
-          const boot_cmdline =
-            "maxcpus=3 nohz_full=0,2-63 root=/dev/ram0 rootfstype=ramfs init=/init console=hvc console=ttyS0";
-
-          const initrd_request = await fetch(
-            "initramfs.cpio.gz?v=" + wasm_linux_version
-          );
-          if (!initrd_request.ok) {
-            throw new Error(
-              "Failed to fetch initrd from server, status: " +
-                initrd_request.status
-            );
-          }
-          const initrd = await initrd_request.arrayBuffer();
-
-          const os = await linux(
-            worker_url,
-            vmlinux,
-            boot_cmdline,
-            initrd,
-            log,
-            console_write
-          );
-
-          // Intercept terminal input to handle Python mode
-          let inputBuffer = "";
-          term.onData(async (data) => {
-            // Check if we're trying to start Python
-            inputBuffer += data;
-
-            // Handle Enter key
-            if (data === "\r" || data === "\n") {
-              const command = inputBuffer.trim();
-
-              // Check if user is starting Python
-              if (command === "python" || command === "python3") {
-                if (pythonReady) {
-                  pythonMode = true;
-                  pythonBuffer = "";
-                  console_write(
-                    "\r\nPython 3.11.3 (main, Oct 2023) [Pyodide] on WebAssembly\r\n"
-                  );
-                  console_write(
-                    'Type "help", "copyright" for more information.\r\n'
-                  );
-                  console_write(">>> ");
-                  inputBuffer = "";
-                  return; // Don't send to Linux
-                } else if (pythonLoading) {
-                  console_write(
-                    "\r\nPython is still loading, please wait...\r\n"
-                  );
-                  inputBuffer = "";
-                  os.key_input("\r"); // Get new prompt
-                  return;
-                } else {
-                  console_write(
-                    "\r\nPython failed to load. Try reloading the page.\r\n"
-                  );
-                  inputBuffer = "";
-                  os.key_input("\r"); // Get new prompt
-                  return;
-                }
+            // Initialize Pyodide in the background (non-blocking)
+            async function initPython() {
+              if (pythonLoading || pythonReady) {
+                return; // Already loading or loaded
               }
 
-              // If in Python mode
-              if (pythonMode) {
-                const command = inputBuffer.replace(/\r/g, "").trim();
+              pythonLoading = true;
+              try {
+                log("Loading Python environment (this may take 10-30 seconds)...");
+                log("You can continue using Linux commands while Python loads.");
 
-                // Check for exit commands
-                if (
-                  command === "exit()" ||
-                  command === "quit()" ||
-                  command === "exit" ||
-                  command === "quit" ||
-                  data === "\x04"
-                ) {
-                  // Ctrl+D or exit commands
-                  pythonMode = false;
-                  pythonBuffer = "";
-                  console_write("\r\nExiting Python...\r\n");
-                  inputBuffer = "";
-                  os.key_input("\r"); // Send enter to get new prompt
-                  return;
+                // Add a timeout to prevent infinite hanging
+                const loadWithTimeout = Promise.race([
+                  loadPyodide({
+                    indexURL: "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/",
+                  }),
+                  new Promise((_, reject) =>
+                    setTimeout(
+                      () => reject(new Error("Pyodide loading timeout (60s)")),
+                      60000
+                    )
+                  ),
+                ]);
+
+                pyodide = await loadWithTimeout;
+
+                // Redirect Python stdout to terminal
+                await pyodide.runPythonAsync(`
+    import sys
+    from io import StringIO
+    sys.stdout = StringIO()
+    sys.stderr = StringIO()
+                `);
+
+                pythonReady = true;
+                pythonLoading = false;
+                log("✓ Python 3.11 ready! Type 'python' or 'python3' to start.");
+                log("  Type 'exit()' to return to Linux shell.");
+              } catch (error) {
+                pythonLoading = false;
+                log("✗ Python initialization failed: " + error.message);
+                log(
+                  "  Tip: Try reloading the page or check your internet connection."
+                );
+                console.error("Python init error:", error);
+              }
+            }
+
+            // Execute Python code
+            async function executePython(code) {
+              if (!pythonReady) {
+                if (pythonLoading) {
+                  return "Python is still loading, please wait...\r\n";
+                }
+                return "Python is not available. Try reloading the page.\r\n";
+              }
+
+              try {
+                // Clear previous output
+                await pyodide.runPythonAsync(`
+    sys.stdout = StringIO()
+    sys.stderr = StringIO()
+                `);
+
+                // Run the code (use async version for better performance)
+                let result = await pyodide.runPythonAsync(code);
+
+                // Get stdout and stderr
+                let stdout = await pyodide.runPythonAsync("sys.stdout.getvalue()");
+                let stderr = await pyodide.runPythonAsync("sys.stderr.getvalue()");
+
+                let output = "";
+                if (stdout) output += stdout;
+                if (stderr) output += stderr;
+
+                // If there's a return value and no stdout, show it (like Python REPL)
+                if (result !== undefined && result !== null && !stdout && !stderr) {
+                  output += String(result);
                 }
 
-                // Execute Python code
-                if (command) {
-                  const output = await executePython(command);
-                  if (output) {
-                    console_write("\r\n" + output);
+                return output ? output + "\r\n" : "";
+              } catch (error) {
+                // Format Python errors nicely
+                const errorMsg = error.message || String(error);
+                return "Python Error: " + errorMsg + "\r\n";
+              }
+            }
+
+            // This is needed for SharedArrayBuffer on modern browsers.
+            if (!window.crossOriginIsolated) {
+              log(
+                "Error: Server did not set correct cross-origin-isolated headers."
+              );
+              console_write(
+                "\r\n\r\n\r\n  IF YOU SEE THIS ERROR RELOADING THE PAGE MAY HELP.\r\n\r\n\r\n"
+              );
+              // Keep going though, it might work in some environments...
+            }
+
+            // Start loading Python in parallel with Linux boot (non-blocking)
+            // Use setTimeout to ensure it doesn't block the main thread
+            setTimeout(() => {
+              initPython().catch((err) => {
+                console.error("Failed to initialize Python:", err);
+              });
+            }, 2000); // Wait 2 seconds after Linux starts booting
+
+            try {
+              const worker_url = "linux-worker.js?v=" + wasm_linux_version;
+
+              const vmlinux = await WebAssembly.compileStreaming(
+                fetch("vmlinux.wasm?v=" + wasm_linux_version)
+              );
+
+              // Boot on 3 CPUs, we will bring up more later on as needed.
+              const boot_cmdline =
+                "maxcpus=3 nohz_full=0,2-63 root=/dev/ram0 rootfstype=ramfs init=/init console=hvc console=ttyS0";
+
+              const initrd_request = await fetch(
+                "initramfs.cpio.gz?v=" + wasm_linux_version
+              );
+              if (!initrd_request.ok) {
+                throw new Error(
+                  "Failed to fetch initrd from server, status: " +
+                    initrd_request.status
+                );
+              }
+              const initrd = await initrd_request.arrayBuffer();
+
+              const os = await linux(
+                worker_url,
+                vmlinux,
+                boot_cmdline,
+                initrd,
+                log,
+                console_write
+              );
+
+              // Intercept terminal input to handle Python mode
+              let inputBuffer = "";
+              term.onData(async (data) => {
+                // Check if we're trying to start Python
+                inputBuffer += data;
+
+                // Handle Enter key
+                if (data === "\r" || data === "\n") {
+                  const command = inputBuffer.trim();
+
+                  // Check if user is starting Python
+                  if (command === "python" || command === "python3") {
+                    if (pythonReady) {
+                      pythonMode = true;
+                      pythonBuffer = "";
+                      console_write(
+                        "\r\nPython 3.11.3 (main, Oct 2023) [Pyodide] on WebAssembly\r\n"
+                      );
+                      console_write(
+                        'Type "help", "copyright" for more information.\r\n'
+                      );
+                      console_write(">>> ");
+                      inputBuffer = "";
+                      return; // Don't send to Linux
+                    } else if (pythonLoading) {
+                      console_write(
+                        "\r\nPython is still loading, please wait...\r\n"
+                      );
+                      inputBuffer = "";
+                      os.key_input("\r"); // Get new prompt
+                      return;
+                    } else {
+                      console_write(
+                        "\r\nPython failed to load. Try reloading the page.\r\n"
+                      );
+                      inputBuffer = "";
+                      os.key_input("\r"); // Get new prompt
+                      return;
+                    }
                   }
+
+                  // If in Python mode
+                  if (pythonMode) {
+                    const command = inputBuffer.replace(/\r/g, "").trim();
+
+                    // Check for exit commands
+                    if (
+                      command === "exit()" ||
+                      command === "quit()" ||
+                      command === "exit" ||
+                      command === "quit" ||
+                      data === "\x04"
+                    ) {
+                      // Ctrl+D or exit commands
+                      pythonMode = false;
+                      pythonBuffer = "";
+                      console_write("\r\nExiting Python...\r\n");
+                      inputBuffer = "";
+                      os.key_input("\r"); // Send enter to get new prompt
+                      return;
+                    }
+
+                    // Execute Python code
+                    if (command) {
+                      const output = await executePython(command);
+                      if (output) {
+                        console_write("\r\n" + output);
+                      }
+                    }
+
+                    pythonBuffer = "";
+                    console_write("\r\n>>> ");
+                    inputBuffer = "";
+                    return; // Don't send to Linux
+                  }
+
+                  inputBuffer = "";
                 }
 
-                pythonBuffer = "";
-                console_write("\r\n>>> ");
-                inputBuffer = "";
-                return; // Don't send to Linux
-              }
-
-              inputBuffer = "";
-            }
-
-            // In Python mode, echo characters but don't send to Linux
-            if (pythonMode) {
-              if (data === "\x7f" || data === "\b") {
-                // Backspace
-                if (pythonBuffer.length > 0) {
-                  pythonBuffer = pythonBuffer.slice(0, -1);
-                  console_write("\b \b");
+                // In Python mode, echo characters but don't send to Linux
+                if (pythonMode) {
+                  if (data === "\x7f" || data === "\b") {
+                    // Backspace
+                    if (pythonBuffer.length > 0) {
+                      pythonBuffer = pythonBuffer.slice(0, -1);
+                      console_write("\b \b");
+                    }
+                  } else if (data !== "\r" && data !== "\n") {
+                    console_write(data);
+                  }
+                  return;
                 }
-              } else if (data !== "\r" && data !== "\n") {
-                console_write(data);
-              }
-              return;
-            }
 
-            // Normal Linux mode - send everything through
-            os.key_input(data);
-          });
-        } catch (error) {
-          log(
-            "Linux/Wasm failed with (" +
-              error.name +
-              "): " +
-              error.message +
-              "\n" +
-              error.stack
-          );
-          throw error;
-        }
-      },
-      false
-    );
+                // Normal Linux mode - send everything through
+                os.key_input(data);
+              });
+            } catch (error) {
+              log(
+                "Linux/Wasm failed with (" +
+                  error.name +
+                  "): " +
+                  error.message +
+                  "\n" +
+                  error.stack
+              );
+              throw error;
+            }
+          },
+          false
+        );
   </script>
 </head>
 
