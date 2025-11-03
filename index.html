@@ -191,6 +191,27 @@
             pythonLoading = false;
             log("✓ Python 3.12 ready! Type 'python' or 'python3' to start.");
             log("  Type 'exit()' to return to Linux shell.");
+
+            // Install commonly used packages in background
+            log("⏳ Installing Python packages (requests, numpy)...");
+            try {
+              await pyodide.loadPackage("micropip");
+              const micropip = pyodide.pyimport("micropip");
+
+              // Install packages
+              await micropip.install("requests");
+              await micropip.install("numpy");
+
+              log("✓ Packages installed: requests, numpy");
+              log(
+                "  Try: import requests; r = requests.get('https://api.github.com')"
+              );
+            } catch (error) {
+              log("⚠ Package installation failed: " + error.message);
+              log(
+                "  Python still works, but some packages may be unavailable."
+              );
+            }
           } catch (error) {
             pythonLoading = false;
             log("✗ Python initialization failed: " + error.message);
