@@ -10,6 +10,9 @@
   <script>window.coi = {coepCredentialless: () => false};</script>
   <script src="coi-serviceworker.min.js"></script>
 
+  <!-- Pyodide - Python for WebAssembly -->
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js"></script>
+
   <script>
     // Append ?v=-1 to the URL to cache-bust smug browsers that ignore your Cache-Control headers.
     let wasm_linux_version = parseInt(new URLSearchParams(document.location.search).get("v") || 1);
@@ -26,12 +29,81 @@
       const log = (text) => term.write(("\x1B[2m" + text + "\x1B[0m\n").replaceAll("\n", "\r\n"));
       const console_write = (data) => term.write(data);  // Pre-decoded UTF-8 data.
 
+      // Global Python state
+      let pyodide = null;
+      let pythonReady = false;
+      let pythonMode = false;
+      let pythonBuffer = "";
+
+      // Initialize Pyodide in the background
+      async function initPython() {
+        try {
+          log("Initializing Python environment (Pyodide)...");
+          pyodide = await loadPyodide({
+            indexURL: "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/"
+          });
+          
+          // Redirect Python stdout to terminal
+          pyodide.runPython(`
+import sys
+from io import StringIO
+sys.stdout = StringIO()
+sys.stderr = StringIO()
+          `);
+          
+          pythonReady = true;
+          log("Python 3.11 ready! Type 'python' or 'python3' to start interactive mode.");
+          log("Type 'exit()' or Ctrl+D to exit Python mode.");
+        } catch (error) {
+          log("Warning: Python initialization failed: " + error.message);
+          log("Python commands will not be available.");
+        }
+      }
+
+      // Execute Python code
+      async function executePython(code) {
+        if (!pythonReady) {
+          return "Python is not ready yet. Please wait...\r\n";
+        }
+        
+        try {
+          // Clear previous output
+          pyodide.runPython(`
+sys.stdout = StringIO()
+sys.stderr = StringIO()
+          `);
+          
+          // Run the code
+          let result = pyodide.runPython(code);
+          
+          // Get stdout and stderr
+          let stdout = pyodide.runPython("sys.stdout.getvalue()");
+          let stderr = pyodide.runPython("sys.stderr.getvalue()");
+          
+          let output = "";
+          if (stdout) output += stdout;
+          if (stderr) output += stderr;
+          
+          // If there's a return value and no stdout, show it
+          if (result !== undefined && !stdout && !stderr) {
+            output += String(result);
+          }
+          
+          return output ? output + "\r\n" : "";
+        } catch (error) {
+          return "Python Error: " + error.message + "\r\n";
+        }
+      }
+
       // This is needed for SharedArrayBuffer on modern browsers.
       if (!window.crossOriginIsolated) {
         log("Error: Server did not set correct cross-origin-isolated headers.");
         console_write("\r\n\r\n\r\n  IF YOU SEE THIS ERROR RELOADING THE PAGE MAY HELP.\r\n\r\n\r\n");
         // Keep going though, it might work in some environments...
       }
+
+      // Start loading Python in parallel with Linux boot
+      initPython();
 
       try {
         const worker_url = "linux-worker.js?v=" + wasm_linux_version;
@@ -49,7 +121,75 @@
         const initrd = await initrd_request.arrayBuffer();
 
         const os = await linux(worker_url, vmlinux, boot_cmdline, initrd, log, console_write);
-        term.onData(data => os.key_input(data));
+        
+        // Intercept terminal input to handle Python mode
+        let inputBuffer = "";
+        term.onData(async (data) => {
+          // Check if we're trying to start Python
+          inputBuffer += data;
+          
+          // Handle Enter key
+          if (data === '\r' || data === '\n') {
+            const command = inputBuffer.trim();
+            
+            // Check if user is starting Python
+            if ((command === 'python' || command === 'python3') && pythonReady) {
+              pythonMode = true;
+              pythonBuffer = "";
+              console_write("\r\nPython 3.11.3 (main, Oct 2023) [Pyodide] on WebAssembly\r\n");
+              console_write('Type "help", "copyright" for more information.\r\n');
+              console_write(">>> ");
+              inputBuffer = "";
+              return; // Don't send to Linux
+            }
+            
+            // If in Python mode
+            if (pythonMode) {
+              pythonBuffer += inputBuffer.replace(/\r/g, '');
+              
+              // Check for exit
+              if (pythonBuffer.trim() === 'exit()' || data === '\x04') { // Ctrl+D
+                pythonMode = false;
+                pythonBuffer = "";
+                console_write("\r\n");
+                inputBuffer = "";
+                os.key_input('\r'); // Send enter to get new prompt
+                return;
+              }
+              
+              // Execute Python code
+              if (pythonBuffer.trim()) {
+                const output = await executePython(pythonBuffer);
+                if (output) {
+                  console_write("\r\n" + output);
+                }
+              }
+              
+              pythonBuffer = "";
+              console_write(">>> ");
+              inputBuffer = "";
+              return; // Don't send to Linux
+            }
+            
+            inputBuffer = "";
+          }
+          
+          // In Python mode, echo characters but don't send to Linux
+          if (pythonMode) {
+            if (data === '\x7f' || data === '\b') { // Backspace
+              if (pythonBuffer.length > 0) {
+                pythonBuffer = pythonBuffer.slice(0, -1);
+                console_write('\b \b');
+              }
+            } else if (data !== '\r' && data !== '\n') {
+              console_write(data);
+            }
+            return;
+          }
+          
+          // Normal Linux mode - send everything through
+          os.key_input(data);
+        });
       } catch (error) {
         log("Linux/Wasm failed with (" + error.name + "): " + error.message + "\n" + error.stack);
         throw error;
