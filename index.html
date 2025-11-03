@@ -294,15 +294,25 @@
           // Intercept terminal input to handle Python mode
           let inputBuffer = "";
           term.onData(async (data) => {
-            // Check if we're trying to start Python
-            inputBuffer += data;
+            // In Python mode, handle specially
+            if (pythonMode) {
+              // Handle Python input (later in code)
+            } else {
+              // Not in Python mode - accumulate command to check for 'python'
+              if (data !== "\r" && data !== "\n") {
+                inputBuffer += data;
+              }
+            }
 
-            // Handle Enter key
+            // Handle Enter key (check for python command)
             if (data === "\r" || data === "\n") {
               const command = inputBuffer.trim();
 
-              // Check if user is starting Python
-              if (command === "python" || command === "python3") {
+              // Check if user is starting Python (only when not already in Python mode)
+              if (
+                !pythonMode &&
+                (command === "python" || command === "python3")
+              ) {
                 if (pythonReady) {
                   pythonMode = true;
                   pythonBuffer = "";
@@ -384,7 +394,8 @@
               return;
             }
 
-            // Normal Linux mode - send everything through
+            // Normal Linux mode - send input to Linux shell
+            // (python command was already intercepted above if needed)
             os.key_input(data);
           });
         } catch (error) {
