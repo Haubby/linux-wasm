@@ -431,6 +431,172 @@ storage = BrowserStorage()
                 }
               }
 
+              // Check for curl/wget commands (HTTP fetch)
+              if (
+                !pythonMode &&
+                (command.startsWith("curl ") || command.startsWith("wget "))
+              ) {
+                const isCurl = command.startsWith("curl ");
+                const url = command.split(" ")[1];
+
+                if (!url) {
+                  console_write("\r\nUsage: curl <url> or wget <url>\r\n");
+                  inputBuffer = "";
+                  os.key_input("\r");
+                  return;
+                }
+
+                console_write("\r\nFetching " + url + "...\r\n");
+
+                try {
+                  const response = await fetch(url);
+                  if (!response.ok) {
+                    console_write(
+                      "Error: HTTP " +
+                        response.status +
+                        " " +
+                        response.statusText +
+                        "\r\n"
+                    );
+                  } else {
+                    const text = await response.text();
+                    console_write(text + "\r\n");
+                  }
+                } catch (error) {
+                  console_write("Error: " + error.message + "\r\n");
+                  console_write(
+                    "Note: CORS may block some requests. Use Python requests for better compatibility.\r\n"
+                  );
+                }
+
+                inputBuffer = "";
+                os.key_input("\r");
+                return;
+              }
+
+              // Check for download command (save file to local machine)
+              if (!pythonMode && command.startsWith("download ")) {
+                const filename = command.substring(9).trim();
+
+                if (!filename) {
+                  console_write("\r\nUsage: download <filename>\r\n");
+                  console_write(
+                    "Example: download myfile.txt (downloads from Python storage)\r\n"
+                  );
+                  inputBuffer = "";
+                  os.key_input("\r");
+                  return;
+                }
+
+                console_write("\r\nDownloading '" + filename + "'...\r\n");
+
+                try {
+                  if (pythonReady) {
+                    // Load file from Python storage
+                    const content = await pyodide.runPythonAsync(`
+try:
+    storage.load_file('${filename}')
+except FileNotFoundError:
+    ''
+                    `);
+
+                    if (content) {
+                      // Create download link
+                      const blob = new Blob([content], { type: "text/plain" });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = filename;
+                      document.body.appendChild(a);
+                      a.click();
+                      document.body.removeChild(a);
+                      URL.revokeObjectURL(url);
+
+                      console_write(
+                        "✓ File downloaded to your browser's download folder\r\n"
+                      );
+                    } else {
+                      console_write(
+                        "Error: File '" +
+                          filename +
+                          "' not found in storage\r\n"
+                      );
+                      console_write(
+                        "Use: storage.list_files() to see available files\r\n"
+                      );
+                    }
+                  } else {
+                    console_write(
+                      "⚠ Python not ready. Cannot download files.\r\n"
+                    );
+                  }
+                } catch (error) {
+                  console_write("Error: " + error.message + "\r\n");
+                }
+
+                inputBuffer = "";
+                os.key_input("\r");
+                return;
+              }
+
+              // Check for upload command (load file from local machine)
+              if (!pythonMode && command === "upload") {
+                console_write("\r\nOpening file picker...\r\n");
+
+                // Create hidden file input
+                const fileInput = document.createElement("input");
+                fileInput.type = "file";
+                fileInput.style.display = "none";
+                document.body.appendChild(fileInput);
+
+                fileInput.onchange = async (e) => {
+                  const file = e.target.files[0];
+                  if (file) {
+                    console_write(
+                      "Reading " +
+                        file.name +
+                        " (" +
+                        file.size +
+                        " bytes)...\r\n"
+                    );
+                    try {
+                      const text = await file.text();
+
+                      // Save to Python storage
+                      if (pythonReady) {
+                        await pyodide.runPythonAsync(`
+storage.save_file('${file.name}', '''${text.replace(/'/g, "\\'")}''')
+                        `);
+                        console_write(
+                          "✓ File saved as '" +
+                            file.name +
+                            "' in Python storage\r\n"
+                        );
+                        console_write(
+                          "Load it with: storage.load_file('" +
+                            file.name +
+                            "')\r\n"
+                        );
+                      } else {
+                        console_write(
+                          "⚠ Python not ready. File read but not saved.\r\n"
+                        );
+                      }
+                    } catch (error) {
+                      console_write(
+                        "Error reading file: " + error.message + "\r\n"
+                      );
+                    }
+                    os.key_input("\r");
+                  }
+                  document.body.removeChild(fileInput);
+                };
+
+                fileInput.click();
+                inputBuffer = "";
+                return;
+              }
+
               // If in Python mode
               if (pythonMode) {
                 const command = pythonBuffer.replace(/\r/g, "").trim();
