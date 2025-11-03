@@ -189,7 +189,7 @@
 
             pythonReady = true;
             pythonLoading = false;
-            log("✓ Python 3.11 ready! Type 'python' or 'python3' to start.");
+            log("✓ Python 3.12 ready! Type 'python' or 'python3' to start.");
             log("  Type 'exit()' to return to Linux shell.");
           } catch (error) {
             pythonLoading = false;
@@ -294,9 +294,11 @@
           // Intercept terminal input to handle Python mode
           let inputBuffer = "";
           term.onData(async (data) => {
-            // In Python mode, handle specially
+            // In Python mode, accumulate into pythonBuffer
             if (pythonMode) {
-              // Handle Python input (later in code)
+              if (data !== "\r" && data !== "\n") {
+                pythonBuffer += data;
+              }
             } else {
               // Not in Python mode - accumulate command to check for 'python'
               if (data !== "\r" && data !== "\n") {
@@ -317,7 +319,7 @@
                   pythonMode = true;
                   pythonBuffer = "";
                   console_write(
-                    "\r\nPython 3.11.3 (main, Oct 2023) [Pyodide] on WebAssembly\r\n"
+                    "\r\nPython 3.12 (main, Nov 2025) [Pyodide 0.29.0] on WebAssembly\r\n"
                   );
                   console_write(
                     'Type "help", "copyright" for more information.\r\n'
@@ -344,7 +346,7 @@
 
               // If in Python mode
               if (pythonMode) {
-                const command = inputBuffer.replace(/\r/g, "").trim();
+                const command = pythonBuffer.replace(/\r/g, "").trim();
 
                 // Check for exit commands
                 if (
@@ -358,7 +360,6 @@
                   pythonMode = false;
                   pythonBuffer = "";
                   console_write("\r\nExiting Python...\r\n");
-                  inputBuffer = "";
                   os.key_input("\r"); // Send enter to get new prompt
                   return;
                 }
@@ -373,7 +374,6 @@
 
                 pythonBuffer = "";
                 console_write("\r\n>>> ");
-                inputBuffer = "";
                 return; // Don't send to Linux
               }
 
