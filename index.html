@@ -146,6 +146,42 @@
           term.write(("\x1B[2m" + text + "\x1B[0m\n").replaceAll("\n", "\r\n"));
         const console_write = (data) => term.write(data); // Pre-decoded UTF-8 data.
 
+        // Memory and freeze detection
+        let lastActivityTime = Date.now();
+        let memoryWarningShown = false;
+
+        function updateActivity() {
+          lastActivityTime = Date.now();
+        }
+
+        // Monitor system health
+        setInterval(() => {
+          // Check memory usage if available
+          if (performance.memory) {
+            const usedMemory = performance.memory.usedJSHeapSize / 1048576; // MB
+            const totalMemory = performance.memory.jsHeapSizeLimit / 1048576; // MB
+            const memoryPercent = (usedMemory / totalMemory) * 100;
+
+            // Warn if memory usage is high
+            if (memoryPercent > 80 && !memoryWarningShown) {
+              console_write(
+                "\r\n\x1B[33m⚠ High memory usage detected (" +
+                  Math.round(memoryPercent) +
+                  "%)\x1B[0m\r\n"
+              );
+              console_write(
+                "\x1B[33m  Tip: Reload page if system becomes sluggish (Ctrl+R)\x1B[0m\r\n\r\n"
+              );
+              memoryWarningShown = true;
+            }
+
+            // Reset warning if memory drops
+            if (memoryPercent < 70) {
+              memoryWarningShown = false;
+            }
+          }
+        }, 10000); // Check every 10 seconds
+
         // Global Python state
         let pyodide = null;
         let pythonReady = false;
@@ -552,6 +588,11 @@ storage = BrowserStorage()
             log(
               "  Files persist during session, use Python for long-term storage"
             );
+            log("");
+            log("💡 Tips:");
+            log("  • Type 'restart' or press Ctrl+R if system freezes");
+            log("  • Type 'meminfo' to check memory usage");
+            log("  • Type 'help-storage' for all available commands");
           } catch (error) {
             log("⚠ Virtual filesystem setup had issues: " + error.message);
           }
@@ -559,6 +600,16 @@ storage = BrowserStorage()
           // Intercept terminal input to handle Python mode
           let inputBuffer = "";
           term.onData(async (data) => {
+            updateActivity(); // Track user activity
+
+            // Check for Ctrl+Alt+R (system restart shortcut)
+            if (data === "\x12") {
+              // Ctrl+R
+              console_write("\r\n\x1B[33m🔄 Reloading page...\x1B[0m\r\n");
+              setTimeout(() => window.location.reload(), 500);
+              return;
+            }
+
             // In Python mode, accumulate into pythonBuffer
             if (pythonMode) {
               if (data !== "\r" && data !== "\n") {
@@ -959,6 +1010,66 @@ storage.save_file('${filename}', '''${content.replace(/'/g, "\\'")}''')
               }
 
               // Add help command for cloud storage features
+              // System commands
+              if (!pythonMode && command === "restart") {
+                console_write("\r\n🔄 Reloading system...\r\n");
+                setTimeout(() => window.location.reload(), 500);
+                return;
+              }
+
+              if (!pythonMode && command === "meminfo") {
+                console_write("\r\n=== System Memory Status ===\r\n");
+                if (performance.memory) {
+                  const used = (
+                    performance.memory.usedJSHeapSize / 1048576
+                  ).toFixed(2);
+                  const total = (
+                    performance.memory.jsHeapSizeLimit / 1048576
+                  ).toFixed(2);
+                  const percent = (
+                    (performance.memory.usedJSHeapSize /
+                      performance.memory.jsHeapSizeLimit) *
+                    100
+                  ).toFixed(1);
+                  console_write(
+                    "Memory Used: " +
+                      used +
+                      " MB / " +
+                      total +
+                      " MB (" +
+                      percent +
+                      "%)\r\n"
+                  );
+
+                  if (percent > 80) {
+                    console_write(
+                      "\x1B[33m⚠ High memory usage! Consider restarting.\x1B[0m\r\n"
+                    );
+                  } else if (percent > 60) {
+                    console_write(
+                      "\x1B[33m⚠ Moderate memory usage.\x1B[0m\r\n"
+                    );
+                  } else {
+                    console_write(
+                      "\x1B[32m✓ Memory usage is healthy.\x1B[0m\r\n"
+                    );
+                  }
+                } else {
+                  console_write(
+                    "Memory monitoring not available in this browser.\r\n"
+                  );
+                  console_write(
+                    "Try Chrome/Edge with --enable-precise-memory-info flag.\r\n"
+                  );
+                }
+                console_write(
+                  "\r\nTip: Use 'restart' command or press Ctrl+R to reload\r\n"
+                );
+                inputBuffer = "";
+                os.key_input("\r");
+                return;
+              }
+
               if (!pythonMode && command === "help-storage") {
                 console_write(
                   "\r\n=== GitHub Cloud Storage Commands (FREE - up to 5GB) ===\r\n"
@@ -991,6 +1102,9 @@ storage.save_file('${filename}', '''${content.replace(/'/g, "\\'")}''')
                 console_write("\r\n=== Network Commands ===\r\n");
                 console_write("curl <url>          Fetch data from URL\r\n");
                 console_write("wget <url>          Fetch data from URL\r\n");
+                console_write("\r\n=== System Commands ===\r\n");
+                console_write("restart             Reload the system\r\n");
+                console_write("meminfo             Show memory status\r\n");
                 console_write("\r\n=== Python ===\r\n");
                 console_write("python              Enter Python 3.13 REPL\r\n");
                 console_write("  storage.save_file(), storage.load_file()\r\n");
