@@ -268,6 +268,179 @@ storage = BrowserStorage()
           }
         }
 
+        // GitHub Cloud Storage Configuration (FREE - 1-5 GB)
+        // Uses your current repository for cloud file storage
+        const GITHUB_OWNER = "Haubby"; // Your GitHub username
+        const GITHUB_REPO = "linux-wasm"; // This repository
+        const GITHUB_BRANCH = "storage"; // Separate branch for user files
+        const GITHUB_TOKEN = ""; // Optional: Personal Access Token for private repos
+        // Generate token at: https://github.com/settings/tokens (repo scope)
+        // Leave empty for public repos (60 requests/hour limit)
+
+        let githubStorageReady = false;
+
+        // Initialize GitHub Cloud Storage
+        async function initGitHubStorage() {
+          try {
+            // Check if the storage branch exists
+            const branchUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/branches/${GITHUB_BRANCH}`;
+            const headers = GITHUB_TOKEN
+              ? { Authorization: `token ${GITHUB_TOKEN}` }
+              : {};
+
+            const response = await fetch(branchUrl, { headers });
+
+            if (response.status === 404) {
+              log("⚠ GitHub storage branch not found.");
+              log(
+                `  Create branch '${GITHUB_BRANCH}' in your repo for cloud storage.`
+              );
+              log("  Using local storage only.");
+              return;
+            }
+
+            if (response.ok) {
+              githubStorageReady = true;
+              log("✓ GitHub Cloud Storage connected! (FREE - up to 5 GB)");
+              log(`  Repository: ${GITHUB_OWNER}/${GITHUB_REPO}`);
+              log(`  Branch: ${GITHUB_BRANCH}`);
+            } else {
+              log("⚠ GitHub API error: " + response.status);
+              log("  Using local storage only.");
+            }
+          } catch (error) {
+            log("⚠ GitHub Storage connection failed: " + error.message);
+            log("  Continuing with local storage only.");
+          }
+        }
+
+        // GitHub storage helper functions
+        async function githubUploadFile(filename, content) {
+          const path = `files/${filename}`;
+          const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${path}`;
+          const headers = {
+            "Content-Type": "application/json",
+          };
+
+          if (GITHUB_TOKEN) {
+            headers["Authorization"] = `token ${GITHUB_TOKEN}`;
+          }
+
+          // Check if file exists to get SHA (required for updates)
+          let sha = null;
+          try {
+            const checkResponse = await fetch(url + `?ref=${GITHUB_BRANCH}`, {
+              headers,
+            });
+            if (checkResponse.ok) {
+              const data = await checkResponse.json();
+              sha = data.sha;
+            }
+          } catch (e) {
+            // File doesn't exist, that's okay
+          }
+
+          // Upload or update file
+          const body = {
+            message: `Upload ${filename}`,
+            content: btoa(unescape(encodeURIComponent(content))), // Base64 encode
+            branch: GITHUB_BRANCH,
+          };
+
+          if (sha) {
+            body.sha = sha; // Required for updates
+          }
+
+          const response = await fetch(url, {
+            method: "PUT",
+            headers: headers,
+            body: JSON.stringify(body),
+          });
+
+          if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.message || "GitHub upload failed");
+          }
+
+          return `Uploaded ${filename} to GitHub Cloud Storage`;
+        }
+
+        async function githubDownloadFile(filename) {
+          const path = `files/${filename}`;
+          const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${path}?ref=${GITHUB_BRANCH}`;
+          const headers = GITHUB_TOKEN
+            ? { Authorization: `token ${GITHUB_TOKEN}` }
+            : {};
+
+          const response = await fetch(url, { headers });
+
+          if (!response.ok) {
+            throw new Error(`File not found: ${filename}`);
+          }
+
+          const data = await response.json();
+          // Decode from base64
+          return decodeURIComponent(escape(atob(data.content)));
+        }
+
+        async function githubListFiles() {
+          const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/files?ref=${GITHUB_BRANCH}`;
+          const headers = GITHUB_TOKEN
+            ? { Authorization: `token ${GITHUB_TOKEN}` }
+            : {};
+
+          const response = await fetch(url, { headers });
+
+          if (!response.ok) {
+            if (response.status === 404) {
+              return []; // Directory doesn't exist yet
+            }
+            throw new Error("Failed to list files");
+          }
+
+          const data = await response.json();
+          return data.map((item) => item.name);
+        }
+
+        async function githubDeleteFile(filename) {
+          const path = `files/${filename}`;
+          const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${path}`;
+          const headers = {
+            "Content-Type": "application/json",
+          };
+
+          if (GITHUB_TOKEN) {
+            headers["Authorization"] = `token ${GITHUB_TOKEN}`;
+          }
+
+          // Get file SHA (required for deletion)
+          const getResponse = await fetch(url + `?ref=${GITHUB_BRANCH}`, {
+            headers,
+          });
+          if (!getResponse.ok) {
+            throw new Error(`File not found: ${filename}`);
+          }
+
+          const data = await getResponse.json();
+
+          // Delete file
+          const deleteResponse = await fetch(url, {
+            method: "DELETE",
+            headers: headers,
+            body: JSON.stringify({
+              message: `Delete ${filename}`,
+              sha: data.sha,
+              branch: GITHUB_BRANCH,
+            }),
+          });
+
+          if (!deleteResponse.ok) {
+            throw new Error("Failed to delete file");
+          }
+
+          return `Deleted ${filename} from GitHub Cloud Storage`;
+        }
+
         // Execute Python code
         async function executePython(code) {
           if (!pythonReady) {
@@ -326,6 +499,11 @@ storage = BrowserStorage()
             console.error("Failed to initialize Python:", err);
           });
         }, 2000); // Wait 2 seconds after Linux starts booting
+
+        // Initialize GitHub Cloud Storage
+        setTimeout(() => {
+          initGitHubStorage();
+        }, 3000); // Wait 3 seconds to not block Python loading
 
         try {
           const worker_url = "linux-worker.js?v=" + wasm_linux_version;
@@ -594,6 +772,235 @@ storage.save_file('${file.name}', '''${text.replace(/'/g, "\\'")}''')
 
                 fileInput.click();
                 inputBuffer = "";
+                return;
+              }
+
+              // Check for GitHub cloud storage commands
+              if (!pythonMode && command.startsWith("git-upload ")) {
+                const filename = command.substring(11).trim();
+
+                if (!filename) {
+                  console_write("\r\nUsage: git-upload <filename>\r\n");
+                  console_write(
+                    "Uploads file from local storage to GitHub Cloud Storage (FREE)\r\n"
+                  );
+                  inputBuffer = "";
+                  os.key_input("\r");
+                  return;
+                }
+
+                if (!githubStorageReady) {
+                  console_write(
+                    "\r\n⚠ GitHub Cloud Storage not configured\r\n"
+                  );
+                  console_write("See: help-storage for setup instructions\r\n");
+                  inputBuffer = "";
+                  os.key_input("\r");
+                  return;
+                }
+
+                console_write("\r\nUploading to GitHub...\r\n");
+
+                try {
+                  if (pythonReady) {
+                    const content = await pyodide.runPythonAsync(`
+try:
+    storage.load_file('${filename}')
+except FileNotFoundError:
+    ''
+                    `);
+
+                    if (content) {
+                      await githubUploadFile(filename, content);
+                      console_write(
+                        "✓ File uploaded to GitHub Cloud Storage (FREE)\r\n"
+                      );
+                    } else {
+                      console_write(
+                        "Error: File '" +
+                          filename +
+                          "' not found in local storage\r\n"
+                      );
+                    }
+                  } else {
+                    console_write(
+                      "⚠ Python not ready. Cannot upload files.\r\n"
+                    );
+                  }
+                } catch (error) {
+                  console_write("Error: " + error.message + "\r\n");
+                  console_write(
+                    "Hint: You may need a GitHub token for write access.\r\n"
+                  );
+                }
+
+                inputBuffer = "";
+                os.key_input("\r");
+                return;
+              }
+
+              if (!pythonMode && command.startsWith("git-download ")) {
+                const filename = command.substring(13).trim();
+
+                if (!filename) {
+                  console_write("\r\nUsage: git-download <filename>\r\n");
+                  console_write(
+                    "Downloads file from GitHub Cloud Storage to local storage\r\n"
+                  );
+                  inputBuffer = "";
+                  os.key_input("\r");
+                  return;
+                }
+
+                if (!githubStorageReady) {
+                  console_write(
+                    "\r\n⚠ GitHub Cloud Storage not configured\r\n"
+                  );
+                  inputBuffer = "";
+                  os.key_input("\r");
+                  return;
+                }
+
+                console_write("\r\nDownloading from GitHub...\r\n");
+
+                try {
+                  const content = await githubDownloadFile(filename);
+
+                  if (pythonReady && content) {
+                    await pyodide.runPythonAsync(`
+storage.save_file('${filename}', '''${content.replace(/'/g, "\\'")}''')
+                    `);
+                    console_write(
+                      "✓ File downloaded from GitHub and saved locally\r\n"
+                    );
+                    console_write(
+                      "Access with: storage.load_file('" + filename + "')\r\n"
+                    );
+                  } else {
+                    console_write(
+                      "✓ Downloaded: " + content.length + " bytes\r\n"
+                    );
+                  }
+                } catch (error) {
+                  console_write("Error: " + error.message + "\r\n");
+                }
+
+                inputBuffer = "";
+                os.key_input("\r");
+                return;
+              }
+
+              if (!pythonMode && command === "git-list") {
+                if (!githubStorageReady) {
+                  console_write(
+                    "\r\n⚠ GitHub Cloud Storage not configured\r\n"
+                  );
+                  inputBuffer = "";
+                  os.key_input("\r");
+                  return;
+                }
+
+                console_write(
+                  "\r\nListing files in GitHub Cloud Storage...\r\n"
+                );
+
+                try {
+                  const files = await githubListFiles();
+                  if (files.length === 0) {
+                    console_write("No files found.\r\n");
+                  } else {
+                    files.forEach((file) => {
+                      console_write("  " + file + "\r\n");
+                    });
+                    console_write(
+                      "\r\nTotal: " + files.length + " files (FREE storage)\r\n"
+                    );
+                  }
+                } catch (error) {
+                  console_write("Error: " + error.message + "\r\n");
+                }
+
+                inputBuffer = "";
+                os.key_input("\r");
+                return;
+              }
+
+              if (!pythonMode && command.startsWith("git-delete ")) {
+                const filename = command.substring(11).trim();
+
+                if (!filename) {
+                  console_write("\r\nUsage: git-delete <filename>\r\n");
+                  inputBuffer = "";
+                  os.key_input("\r");
+                  return;
+                }
+
+                if (!githubStorageReady) {
+                  console_write(
+                    "\r\n⚠ GitHub Cloud Storage not configured\r\n"
+                  );
+                  inputBuffer = "";
+                  os.key_input("\r");
+                  return;
+                }
+
+                console_write("\r\nDeleting from GitHub...\r\n");
+
+                try {
+                  await githubDeleteFile(filename);
+                  console_write("✓ File deleted from GitHub Cloud Storage\r\n");
+                } catch (error) {
+                  console_write("Error: " + error.message + "\r\n");
+                }
+
+                inputBuffer = "";
+                os.key_input("\r");
+                return;
+              }
+
+              // Add help command for cloud storage features
+              if (!pythonMode && command === "help-storage") {
+                console_write(
+                  "\r\n=== GitHub Cloud Storage Commands (FREE - up to 5GB) ===\r\n"
+                );
+                console_write("git-upload <file>    Upload file to GitHub\r\n");
+                console_write(
+                  "git-download <file>  Download file from GitHub\r\n"
+                );
+                console_write(
+                  "git-list             List all files in GitHub\r\n"
+                );
+                console_write(
+                  "git-delete <file>    Delete file from GitHub\r\n"
+                );
+                console_write(
+                  "\r\n=== Local Storage Commands (10MB limit) ===\r\n"
+                );
+                console_write(
+                  "upload               Upload file from computer\r\n"
+                );
+                console_write(
+                  "download <file>      Download file to computer\r\n"
+                );
+                console_write(
+                  "\r\nSetup: To enable write access, set GITHUB_TOKEN\r\n"
+                );
+                console_write(
+                  "in index.html with a Personal Access Token.\r\n"
+                );
+                console_write("\r\n=== Network Commands ===\r\n");
+                console_write("curl <url>          Fetch data from URL\r\n");
+                console_write("wget <url>          Fetch data from URL\r\n");
+                console_write("\r\n=== Python ===\r\n");
+                console_write("python              Enter Python 3.13 REPL\r\n");
+                console_write("  storage.save_file(), storage.load_file()\r\n");
+                console_write(
+                  "  storage.list_files(), storage.delete_file()\r\n"
+                );
+                console_write("\r\n");
+
+                inputBuffer = "";
+                os.key_input("\r");
                 return;
               }
 
